@@ -1,0 +1,187 @@
+{
+  "id": "LLErrorHandler01",
+  "name": "LendLoop · Error handler",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "cbf6a5ec-67ef-45c4-a89c-c7352b7fc45d",
+      "name": "On workflow error",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Summarize the failed execution for LendLoop. Only metadata + the error\n// message are forwarded — never the failed run's input data.\nconst e = $json;\nconst failure = e.execution || e.trigger || {};\nconst payload = {\n  workflowId: String((e.workflow && e.workflow.id) || 'unknown'),\n  workflowName: String((e.workflow && e.workflow.name) || 'unknown'),\n  executionId: String((e.execution && e.execution.id) || 'trigger-' + Date.now()),\n  message: String((failure.error && failure.error.message) || 'Unknown error').slice(0, 500),\n};\nif (e.execution && e.execution.lastNodeExecuted) payload.lastNodeExecuted = String(e.execution.lastNodeExecuted);\nif (e.execution && e.execution.url) payload.executionUrl = String(e.execution.url);\nreturn [{ json: { payload } }];"
+      },
+      "id": "e85d43ef-4c91-4e9d-acf3-a23cb37e92b7",
+      "name": "Build error report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sign each outgoing payload for LendLoop (HMAC-SHA256 over \"<timestamp>.<body>\").\n// The secret comes from the n8n environment, never from the workflow JSON.\nconst crypto = require('crypto');\nconst secret = $env.N8N_TO_LENDLOOP_SECRET;\nif (!secret) throw new Error('N8N_TO_LENDLOOP_SECRET is not configured');\n\nreturn $input.all().map((item) => {\n  const body = JSON.stringify(item.json.payload);\n  const timestamp = String(Date.now());\n  const signature = 'sha256=' + crypto.createHmac('sha256', secret).update(timestamp + '.' + body).digest('hex');\n  return { json: { body, timestamp, signature }, pairedItem: item.pairedItem };\n});"
+      },
+      "id": "e9b0193b-6909-43a3-a3d3-47fe3e7e9c7b",
+      "name": "Sign report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.LENDLOOP_CONVEX_SITE_URL }}/n8n/workflow-error",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-LendLoop-Timestamp",
+              "value": "={{ $json.timestamp }}"
+            },
+            {
+              "name": "X-LendLoop-Signature",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ $json.body }}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "e17da561-0539-42ba-abc5-f306db985d38",
+      "name": "Report to LendLoop",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        200
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $json.payload;\nreturn [{\n  json: {\n    to: $env.LENDLOOP_OPS_EMAIL,\n    subject: '[LendLoop] n8n workflow failed: ' + p.workflowName,\n    text: 'Workflow: ' + p.workflowName + '\\nExecution: ' + p.executionId + (p.executionUrl ? ' (' + p.executionUrl + ')' : '') +\n      '\\nFailed at: ' + (p.lastNodeExecuted || 'n/a') + '\\nError: ' + p.message,\n  },\n}];"
+      },
+      "id": "75250366-b542-4d85-a256-d404356b04cc",
+      "name": "Compose ops alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "={{ $env.LENDLOOP_MAIL_FROM }}",
+        "toEmail": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailFormat": "text",
+        "text": "={{ $json.text }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "5b16c1be-209b-4795-a142-877b60e91765",
+      "name": "Alert ops by email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        660,
+        420
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "LLMailpitSmtp001",
+          "name": "LendLoop SMTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "On workflow error": {
+      "main": [
+        [
+          {
+            "node": "Build error report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build error report": {
+      "main": [
+        [
+          {
+            "node": "Sign report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Compose ops alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sign report": {
+      "main": [
+        [
+          {
+            "node": "Report to LendLoop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose ops alert": {
+      "main": [
+        [
+          {
+            "node": "Alert ops by email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

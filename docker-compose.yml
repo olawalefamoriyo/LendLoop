@@ -1,0 +1,70 @@
+# Local automation stack: n8n + Mailpit (a fake SMTP inbox at http://localhost:8025).
+#
+#   cp .env.n8n.example .env.n8n   # or: ./scripts/setup-secrets.sh
+#   docker compose up -d
+#
+# Secrets live in .env.n8n (git-ignored), never in this file or the workflow JSON.
+name: lendloop
+
+x-n8n-image: &n8n-image docker.n8n.io/n8nio/n8n:${N8N_VERSION:-2.47.4}
+
+services:
+  mailpit:
+    image: axllent/mailpit:${MAILPIT_VERSION:-v1.27}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025" # web inbox
+      - "127.0.0.1:1025:1025" # SMTP
+
+  # One-shot: imports the SMTP credential + workflows on first start only
+  # (a marker file prevents re-import from clobbering your edits/activation).
+  # Force a re-import with:  docker compose run --rm -e FORCE_IMPORT=1 n8n-import
+  n8n-import:
+    image: *n8n-image
+    env_file: .env.n8n
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /home/node/.n8n/.lendloop-imported ] && [ -z "$$FORCE_IMPORT" ]; then
+          echo "LendLoop workflows already imported; skipping."; exit 0
+        fi
+        n8n import:credentials --separate --input=/import/credentials
+        n8n import:workflow --separate --input=/import/workflows
+        touch /home/node/.n8n/.lendloop-imported
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n/workflows:/import/workflows:ro
+      - ./n8n/credentials:/import/credentials:ro
+
+  n8n:
+    image: *n8n-image
+    restart: unless-stopped
+    depends_on:
+      n8n-import:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+    ports:
+      - "127.0.0.1:5678:5678"
+    env_file: .env.n8n
+    environment:
+      GENERIC_TIMEZONE: UTC
+      TZ: UTC
+      N8N_WEBHOOK_URL: http://localhost:5678/
+      N8N_SECURE_COOKIE: "false" # plain http on localhost only
+      # Code nodes read the shared HMAC secrets from the environment and need Node's crypto.
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      NODE_FUNCTION_ALLOW_BUILTIN: crypto
+      # Data minimization: executions (which contain recipient emails) are pruned after 7 days.
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: "168"
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # lets n8n reach a Convex backend running on the host
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data:
