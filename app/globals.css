@@ -1,12 +1,19 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --color-brand-50: #eef7f1;
-  --color-brand-100: #d6ecdd;
+  --font-sans: var(--font-jakarta), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-brand-50: #eef8f2;
+  --color-brand-100: #d5eedf;
+  --color-brand-200: #acdcc0;
+  --color-brand-300: #78c39b;
+  --color-brand-400: #48a676;
   --color-brand-500: #2f855a;
   --color-brand-600: #276749;
   --color-brand-700: #22543d;
+  --color-brand-800: #1c4532;
+  --color-brand-900: #133024;
+  --shadow-card: 0 1px 2px rgb(28 25 23 / 0.04), 0 1px 3px rgb(28 25 23 / 0.06);
+  --shadow-lift: 0 4px 12px -2px rgb(28 25 23 / 0.08), 0 2px 4px -2px rgb(28 25 23 / 0.05);
 }
 
 html {
@@ -14,7 +21,7 @@ html {
 }
 
 body {
-  background: #fafaf9;
+  background: #f8f7f4;
   color: #1c1917;
   -webkit-font-smoothing: antialiased;
 }
@@ -22,4 +29,23 @@ body {
 :focus-visible {
   outline: 2px solid var(--color-brand-500);
   outline-offset: 2px;
+}
+
+dialog[open] {
+  animation: dialog-in 160ms ease-out;
+}
+dialog::backdrop {
+  backdrop-filter: blur(2px);
+}
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog[open] {
+    animation: none;
+  }
 }

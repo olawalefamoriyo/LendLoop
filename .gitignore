@@ -1,0 +1,20 @@
+# dependencies
+node_modules
+
+# next.js
+.next/
+out/
+*.tsbuildinfo
+
+# env files (secrets) — keep the *.example templates
+.env*
+!.env*.example
+
+# convex local backend state
+.convex/
+
+# misc
+.DS_Store
+*.log
+coverage/
+.vercel

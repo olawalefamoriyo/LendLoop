@@ -3,7 +3,7 @@
 import { useMutation, useQuery } from "convex/react";
 import { useState } from "react";
 import { LoanStatusBadge } from "@/components/LoanBits";
-import { ActionButton, Badge, Card, EmptyState, Loading, PageHeader } from "@/components/ui";
+import { ActionButton, Avatar, Badge, Card, EmptyState, Loading, PageHeader, Section, Stat, Tabs, TrustedBadge, type Tone } from "@/components/ui";
 import { api } from "@/convex/_generated/api";
 import { formatRange, timeAgo } from "@/lib/format";
 
@@ -16,31 +16,41 @@ export default function AdminPage() {
 
   // The UI hides this page from non-admins, but the queries below are
   // independently protected by adminQuery in Convex.
-  if (me && me.role !== "admin") {
-    return <EmptyState title="Admins only">You don&apos;t have access to this page.</EmptyState>;
+  if (!me) return <Loading />;
+  if (me.role !== "admin") {
+    return (
+      <EmptyState title="Admins only" icon="shield">
+        You don&apos;t have access to this page.
+      </EmptyState>
+    );
   }
 
   return (
     <>
       <PageHeader title="Admin" subtitle="Moderate listings, review loans and keep an eye on automations." />
-      <div className="mb-6 flex gap-1 rounded-lg bg-stone-100 p-1 text-sm" role="tablist">
-        {TABS.map((t) => (
-          <button
-            key={t}
-            role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={`flex-1 rounded-md px-3 py-1.5 font-medium ${tab === t ? "bg-white shadow-sm" : "text-stone-500"}`}
-          >
-            {t}
-          </button>
-        ))}
-      </div>
+      <Overview />
+      <Tabs tabs={TABS} value={tab} onChange={setTab} />
       {tab === "Loans" && <LoansTab />}
       {tab === "Members" && <MembersTab />}
       {tab === "Automation" && <AutomationTab />}
       <p className="mt-6 text-xs text-stone-400">To remove a listing, use the Remove button on Browse.</p>
     </>
+  );
+}
+
+function Overview() {
+  const loans = useQuery(api.admin.listLoans);
+  const users = useQuery(api.admin.listUsers);
+  const health = useQuery(api.admin.automationHealth);
+  const count = (n: number | undefined) => (n === undefined ? "–" : n);
+  const issues = health && health.failed.length + health.workflowErrors.length;
+  return (
+    <div className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Stat icon="handshake" label="Active loans" value={count(loans?.filter((l) => l.status === "approved").length)} />
+      <Stat icon="alert" label="Overdue" value={count(loans?.filter((l) => l.overdue).length)} />
+      <Stat icon="shield" label="Members" value={count(users?.length)} />
+      <Stat icon="bell" label="Automation issues" value={count(issues)} />
+    </div>
   );
 }
 
@@ -51,23 +61,23 @@ function LoansTab() {
   return (
     <Card className="overflow-x-auto p-0">
       <table className="w-full text-left text-sm">
-        <thead className="border-b border-stone-200 text-xs uppercase tracking-wide text-stone-500">
+        <thead className="border-b border-stone-200 bg-stone-50/80 text-xs font-semibold uppercase tracking-wide text-stone-500">
           <tr>
-            <th className="px-4 py-2.5 font-medium">Tool</th>
-            <th className="px-4 py-2.5 font-medium">Lender</th>
-            <th className="px-4 py-2.5 font-medium">Borrower</th>
-            <th className="px-4 py-2.5 font-medium">Dates</th>
-            <th className="px-4 py-2.5 font-medium">Status</th>
+            <th className="px-5 py-3 font-medium">Tool</th>
+            <th className="px-5 py-3 font-medium">Lender</th>
+            <th className="px-5 py-3 font-medium">Borrower</th>
+            <th className="px-5 py-3 font-medium">Dates</th>
+            <th className="px-5 py-3 font-medium">Status</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-stone-100">
           {loans.map((l) => (
-            <tr key={l._id}>
-              <td className="px-4 py-2.5 font-medium">{l.toolName}</td>
-              <td className="px-4 py-2.5">{l.ownerName}</td>
-              <td className="px-4 py-2.5">{l.borrowerName}</td>
-              <td className="whitespace-nowrap px-4 py-2.5">{formatRange(l.startDate, l.endDate)}</td>
-              <td className="px-4 py-2.5">
+            <tr key={l._id} className="transition-colors hover:bg-stone-50/70">
+              <td className="px-5 py-3 font-medium">{l.toolName}</td>
+              <td className="px-5 py-3">{l.ownerName}</td>
+              <td className="px-5 py-3">{l.borrowerName}</td>
+              <td className="whitespace-nowrap px-5 py-3">{formatRange(l.startDate, l.endDate)}</td>
+              <td className="px-5 py-3">
                 <LoanStatusBadge status={l.status} overdue={l.overdue} />
               </td>
             </tr>
@@ -85,18 +95,20 @@ function MembersTab() {
   return (
     <div className="space-y-2">
       {users.map((u) => (
-        <Card key={u._id} className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-medium">{u.name}</span>
+        <Card key={u._id} className="flex flex-wrap items-center gap-4">
+          <Avatar name={u.name} />
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-stone-900">{u.name}</span>
               {u.role === "admin" && <Badge tone="amber">Admin</Badge>}
-              {u.trustedLender && <Badge tone="blue">✓ Trusted Lender</Badge>}
+              {u.trustedLender && <TrustedBadge />}
             </div>
             <p className="text-xs text-stone-500">
               {u.email ?? "no email"} · {u.activeListings} active listing{u.activeListings === 1 ? "" : "s"}
             </p>
           </div>
           <ActionButton
+            size="sm"
             variant={u.trustedLender ? "secondary" : "primary"}
             action={() => setTrusted({ userId: u._id, trusted: !u.trustedLender })}
           >
@@ -114,14 +126,19 @@ function AutomationTab() {
   if (health === undefined) return <Loading />;
 
   const empty = health.failed.length + health.workflowErrors.length + health.pending.length === 0;
-  if (empty) return <EmptyState title="All automations healthy">No failed, stuck or erroring runs.</EmptyState>;
+  if (empty)
+    return (
+      <EmptyState title="All automations healthy" icon="check">
+        No failed, stuck or erroring runs.
+      </EmptyState>
+    );
 
   return (
     <div className="space-y-8">
       <EventSection title="Failed deliveries" tone="red" events={health.failed}>
         {(e) =>
           e.kind === "notification" ? (
-            <ActionButton variant="secondary" action={() => retry({ eventId: e._id })}>
+            <ActionButton variant="secondary" size="sm" action={() => retry({ eventId: e._id })}>
               Retry
             </ActionButton>
           ) : null
@@ -142,33 +159,27 @@ function EventSection({
   children,
 }: {
   title: string;
-  tone: "red" | "amber";
+  tone: Tone;
   events: HealthEvent[];
   children?: (e: HealthEvent) => React.ReactNode;
 }) {
-  if (events.length === 0) return null;
   return (
-    <section>
-      <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-stone-500">
-        {title} <Badge tone={tone}>{events.length}</Badge>
-      </h2>
-      <div className="space-y-2">
-        {events.map((e) => (
-          <Card key={e._id} className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0 text-sm">
-              <p className="font-medium">
-                {e.kind === "workflow_error" ? e.detail : `${e.kind}${e.event ? ` · ${e.event}` : ""}`}
-              </p>
-              {e.lastError && <p className="mt-0.5 break-words text-red-700">{e.lastError}</p>}
-              <p className="mt-0.5 font-mono text-xs text-stone-400">
-                {e.key} · {e.attempts} attempt{e.attempts === 1 ? "" : "s"} · {timeAgo(e.updatedAt)}
-                {e.n8nExecutionId && ` · n8n exec ${e.n8nExecutionId}`}
-              </p>
-            </div>
-            {children?.(e)}
-          </Card>
-        ))}
-      </div>
-    </section>
+    <Section title={title} count={events.length} tone={tone}>
+      {events.map((e) => (
+        <Card key={e._id} className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0 text-sm">
+            <p className="font-semibold text-stone-900">
+              {e.kind === "workflow_error" ? e.detail : `${e.kind}${e.event ? ` · ${e.event}` : ""}`}
+            </p>
+            {e.lastError && <p className="mt-1 break-words text-red-700">{e.lastError}</p>}
+            <p className="mt-1 font-mono text-xs text-stone-400">
+              {e.key} · {e.attempts} attempt{e.attempts === 1 ? "" : "s"} · {timeAgo(e.updatedAt)}
+              {e.n8nExecutionId && ` · n8n exec ${e.n8nExecutionId}`}
+            </p>
+          </div>
+          {children?.(e)}
+        </Card>
+      ))}
+    </Section>
   );
 }
