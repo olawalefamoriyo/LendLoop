@@ -61,7 +61,7 @@ flowchart LR
     WF2[Overdue reminders<br/>Schedule 09:00 UTC]
     WF3[Error handler]
   end
-  Mail[(SMTP / Mailpit)]
+  Mail[(Email API<br/>Brevo / Mailpit)]
 
   UI -- sign in --> Clerk
   UI -- JWT on every call --> Q
@@ -84,7 +84,7 @@ flowchart LR
 - **Convex is the single source of truth and the only place authorization happens.** The Next.js `proxy.ts` (Clerk middleware) only redirects signed-out users to sign in, which is a UX convenience. Every Convex function resolves the caller from the verified Clerk JWT.
 - **Transactional outbox for notifications.** The mutation that changes a loan (e.g. `loans.decide`) also inserts an `automationEvents` row and schedules the `notifications.deliver` action, all in one transaction. A notification can't be lost, and none is sent for a change that rolled back.
 - **One table for all automation state.** `automationEvents` stores notifications, reminders and n8n workflow errors. Each row has a deterministic idempotency `key`, a status, an attempt count and the last error. The same table powers the per-loan activity feed and the admin health panel.
-- **n8n stays thin.** It formats messages, talks to SMTP and owns the schedule. Deciding *who* gets reminded and *whether* a reminder was already sent is Convex's job, so the rules live in one tested place.
+- **n8n stays thin.** It formats messages, calls the email provider's HTTPS API and owns the schedule. Deciding *who* gets reminded and *whether* a reminder was already sent is Convex's job, so the rules live in one tested place.
 
 ### Data model (`convex/schema.ts`)
 
@@ -150,7 +150,7 @@ This writes `CONVEX_DEPLOYMENT` and `NEXT_PUBLIC_CONVEX_URL` to `.env.local`. Le
 docker compose up -d
 ```
 
-- **n8n:** <http://localhost:5678>. Create the owner account on first visit. The first start automatically imports the three workflows and an SMTP credential that points at Mailpit.
+- **n8n:** <http://localhost:5678>. Create the owner account on first visit. The first start automatically imports the three workflows and a placeholder "LendLoop Mail API" credential (Mailpit ignores it).
 - **Mailpit (inbox for every email sent):** <http://localhost:8025>
 
 Then publish (activate) the two workflows. The error handler doesn't need to be active. Either click **Publish** on each workflow in the n8n UI, or run:
@@ -217,9 +217,13 @@ npm run dev               # Next.js on :3000 + convex dev
 | `LENDLOOP_TO_N8N_SECRET` / `N8N_TO_LENDLOOP_SECRET` | The same two secrets as on Convex |
 | `LENDLOOP_CONVEX_SITE_URL` | Convex HTTP actions base URL, as seen from the n8n container |
 | `LENDLOOP_APP_URL` | Base URL for links in emails |
-| `LENDLOOP_MAIL_FROM`, `LENDLOOP_OPS_EMAIL` | Sender address, and the recipient of failure alerts |
+| `LENDLOOP_MAIL_FROM`, `LENDLOOP_OPS_EMAIL` | Sender address (`Name <email>` or a bare address), and the recipient of failure alerts |
+| `LENDLOOP_MAIL_API` | Email provider: unset = Mailpit's send API (local), `brevo` = Brevo's transactional API (production) |
+| `LENDLOOP_MAILPIT_URL` | Optional override for the Mailpit send endpoint (default `http://mailpit:8025/api/v1/send`) |
 
-SMTP connection details live in an **n8n credential** ("LendLoop SMTP"), not in the workflows. The bundled credential points at Mailpit and contains no secret. For real SMTP, edit that credential in the n8n UI.
+**Email goes over HTTPS, not SMTP.** Some hosting plans block outbound SMTP, and a blocked SMTP connection can hang instead of failing. Each workflow's "Compose" step builds a provider-specific request and a single HTTP node sends it, with a 15s timeout and 3 tries. A failure goes down the same `failed` path as before.
+
+The Brevo API key is stored only in the n8n **Header Auth** credential "LendLoop Mail API" (header `api-key`), never in the workflow JSON. The bundled credential is a placeholder for Mailpit, which ignores the header. In production, open that credential and paste your Brevo API key (`xkeysib-…`). Its sender must be verified in Brevo.
 
 ---
 
@@ -257,7 +261,7 @@ Workflow exports live in [`n8n/workflows/`](n8n/workflows/):
 
 | File | Trigger | What it does |
 | --- | --- | --- |
-| `lendloop-loan-notifications.json` | Webhook `POST /webhook/lendloop-loan-events` | Verifies the HMAC → responds 202 (or 401) → composes the email for that event type → sends it via SMTP (3 tries) → posts a signed `sent`/`failed` write-back to Convex (3 tries). |
+| `lendloop-loan-notifications.json` | Webhook `POST /webhook/lendloop-loan-events` | Verifies the HMAC → responds 202 (or 401) → composes the email for that event type → sends it via the email API (15s timeout, 3 tries) → posts a signed `sent`/`failed` write-back to Convex (3 tries). |
 | `lendloop-overdue-reminders.json` | Schedule, daily 09:00 UTC (plus a manual trigger) | Signed `POST /n8n/overdue-loans` → one item per reminder → email (3 tries) → signed write-back to `/n8n/reminder-status` (3 tries). |
 | `lendloop-error-handler.json` | Error Trigger (set as the error workflow for both workflows above) | Builds a metadata-only error report → signed `POST /n8n/workflow-error` **and** an email to `LENDLOOP_OPS_EMAIL`. Each path continues even if the other fails. |
 
@@ -342,7 +346,7 @@ convex/
   reminders.ts             overdue lease + write-back
   http.ts                  signed n8n endpoints
 n8n/workflows/*.json       exported workflows
-n8n/credentials/           Mailpit SMTP credential (no secret)
+n8n/credentials/           placeholder email-API credential (no secret)
 docker-compose.yml         n8n + Mailpit + one-shot importer
 scripts/setup-secrets.sh   generates and distributes the shared secrets
 proxy.ts                   Clerk middleware (Next 16 name for middleware.ts)

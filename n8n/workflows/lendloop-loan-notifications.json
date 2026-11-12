@@ -105,7 +105,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Turn a LendLoop loan event into a short, friendly email.\n// Uses only the fields Convex sent: recipient email + first name, the other\n// party's first name, tool name and dates.\nconst e = $json.event;\nconst appUrl = $env.LENDLOOP_APP_URL || 'http://localhost:3000';\nconst fmt = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });\nconst dates = e.loan.startDate === e.loan.endDate ? fmt(e.loan.startDate) : fmt(e.loan.startDate) + ' – ' + fmt(e.loan.endDate);\nconst tool = e.loan.toolName;\nconst other = e.counterpartFirstName;\n\nconst templates = {\n  request_created: [`${other} would like to borrow your ${tool}`, `${other} asked to borrow your ${tool} for ${dates}.\\n\\nApprove or decline: ${appUrl}/incoming`],\n  request_approved: [`${other} approved your request for the ${tool}`, `Good news! ${other} approved your request to borrow the ${tool} for ${dates}.\\n\\nSee pickup details: ${appUrl}/requests`],\n  request_declined: [`Your request for the ${tool} was declined`, `Your request to borrow the ${tool} for ${dates} wasn't approved this time.\\n\\nFind something else: ${appUrl}/tools`],\n  request_cancelled: [`${other} cancelled their request for your ${tool}`, `${other} cancelled their request to borrow your ${tool} for ${dates}. No action needed.`],\n  loan_returned: [`Thanks for returning the ${tool}`, `${other} marked the ${tool} as returned. Thanks for being a good neighbor!`],\n  listing_removed: [`The ${tool} is no longer available`, `The listing for the ${tool} was removed, so your request for ${dates} has been cancelled.\\n\\nBrowse other tools: ${appUrl}/tools`],\n};\nconst t = templates[e.type];\nif (!t) throw new Error('Unknown LendLoop event type: ' + e.type);\n\nreturn [{\n  json: {\n    eventId: e.eventId,\n    to: e.recipient.email,\n    subject: '[LendLoop] ' + t[0],\n    text: 'Hi ' + e.recipient.firstName + ',\\n\\n' + t[1] + '\\n\\n— LendLoop',\n  },\n}];"
+        "jsCode": "// Build the email request for the configured provider (no secrets here: Brevo's\n// API key lives in the \"LendLoop Mail API\" header-auth credential).\n//  - LENDLOOP_MAIL_API=brevo -> Brevo transactional API over HTTPS (production)\n//  - otherwise                -> Mailpit's send API (local docker-compose)\nfunction mailRequest(to, subject, text) {\n  const from = String($env.LENDLOOP_MAIL_FROM || 'LendLoop <no-reply@lendloop.local>');\n  const m = from.match(/^\\s*(.*?)\\s*<([^>]+)>\\s*$/);\n  const sender = m ? { name: m[1] || 'LendLoop', email: m[2].trim() } : { name: 'LendLoop', email: from.trim() };\n  if ($env.LENDLOOP_MAIL_API === 'brevo') {\n    return {\n      url: 'https://api.brevo.com/v3/smtp/email',\n      body: { sender, to: [{ email: to }], subject, textContent: text },\n    };\n  }\n  return {\n    url: $env.LENDLOOP_MAILPIT_URL || 'http://mailpit:8025/api/v1/send',\n    body: { From: { Email: sender.email, Name: sender.name }, To: [{ Email: to }], Subject: subject, Text: text },\n  };\n}\n\n// Turn a LendLoop loan event into a short, friendly email.\n// Uses only the fields Convex sent: recipient email + first name, the other\n// party's first name, tool name and dates.\nconst e = $json.event;\nconst appUrl = $env.LENDLOOP_APP_URL || 'http://localhost:3000';\nconst fmt = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });\nconst dates = e.loan.startDate === e.loan.endDate ? fmt(e.loan.startDate) : fmt(e.loan.startDate) + ' – ' + fmt(e.loan.endDate);\nconst tool = e.loan.toolName;\nconst other = e.counterpartFirstName;\n\nconst templates = {\n  request_created: [`${other} would like to borrow your ${tool}`, `${other} asked to borrow your ${tool} for ${dates}.\\n\\nApprove or decline: ${appUrl}/incoming`],\n  request_approved: [`${other} approved your request for the ${tool}`, `Good news! ${other} approved your request to borrow the ${tool} for ${dates}.\\n\\nSee pickup details: ${appUrl}/requests`],\n  request_declined: [`Your request for the ${tool} was declined`, `Your request to borrow the ${tool} for ${dates} wasn't approved this time.\\n\\nFind something else: ${appUrl}/tools`],\n  request_cancelled: [`${other} cancelled their request for your ${tool}`, `${other} cancelled their request to borrow your ${tool} for ${dates}. No action needed.`],\n  loan_returned: [`Thanks for returning the ${tool}`, `${other} marked the ${tool} as returned. Thanks for being a good neighbor!`],\n  listing_removed: [`The ${tool} is no longer available`, `The listing for the ${tool} was removed, so your request for ${dates} has been cancelled.\\n\\nBrowse other tools: ${appUrl}/tools`],\n};\nconst t = templates[e.type];\nif (!t) throw new Error('Unknown LendLoop event type: ' + e.type);\n\nconst to = e.recipient.email;\nconst subject = '[LendLoop] ' + t[0];\nconst text = 'Hi ' + e.recipient.firstName + ',\\n\\n' + t[1] + '\\n\\n— LendLoop';\nreturn [{ json: { eventId: e.eventId, to, subject, text, mail: mailRequest(to, subject, text) } }];"
       },
       "id": "9791085c-5e51-4ac2-aa6f-f8fefee88bbe",
       "name": "Compose message",
@@ -118,27 +118,30 @@
     },
     {
       "parameters": {
-        "fromEmail": "={{ $env.LENDLOOP_MAIL_FROM }}",
-        "toEmail": "={{ $json.to }}",
-        "subject": "={{ $json.subject }}",
-        "emailFormat": "text",
-        "text": "={{ $json.text }}",
+        "method": "POST",
+        "url": "={{ $json.mail.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.mail.body) }}",
         "options": {
-          "appendAttribution": false
+          "timeout": 15000
         }
       },
       "id": "a4e97142-f388-4df8-a900-812d7eb8c4ec",
       "name": "Send email",
-      "type": "n8n-nodes-base.emailSend",
-      "typeVersion": 2.1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1100,
         200
       ],
       "credentials": {
-        "smtp": {
-          "id": "LLMailpitSmtp001",
-          "name": "LendLoop SMTP"
+        "httpHeaderAuth": {
+          "id": "LLMailApiCred001",
+          "name": "LendLoop Mail API"
         }
       },
       "retryOnFail": true,

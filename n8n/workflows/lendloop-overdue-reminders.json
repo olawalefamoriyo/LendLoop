@@ -114,7 +114,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const r = $json;\nconst appUrl = $env.LENDLOOP_APP_URL || 'http://localhost:3000';\nconst due = new Date(r.dueDate + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });\nconst days = r.daysOverdue === 1 ? '1 day' : r.daysOverdue + ' days';\nreturn {\n  json: {\n    reminderKey: r.reminderKey,\n    to: r.recipient.email,\n    subject: '[LendLoop] Reminder: please return the ' + r.toolName,\n    text: 'Hi ' + r.recipient.firstName + ',\\n\\nThe ' + r.toolName + ' you borrowed from ' + r.lenderFirstName +\n      ' was due back on ' + due + ' (' + days + ' ago). Please arrange to return it soon.\\n\\n' +\n      'Your loans: ' + appUrl + '/requests\\n\\n— LendLoop',\n  },\n};"
+        "jsCode": "// Build the email request for the configured provider (no secrets here: Brevo's\n// API key lives in the \"LendLoop Mail API\" header-auth credential).\n//  - LENDLOOP_MAIL_API=brevo -> Brevo transactional API over HTTPS (production)\n//  - otherwise                -> Mailpit's send API (local docker-compose)\nfunction mailRequest(to, subject, text) {\n  const from = String($env.LENDLOOP_MAIL_FROM || 'LendLoop <no-reply@lendloop.local>');\n  const m = from.match(/^\\s*(.*?)\\s*<([^>]+)>\\s*$/);\n  const sender = m ? { name: m[1] || 'LendLoop', email: m[2].trim() } : { name: 'LendLoop', email: from.trim() };\n  if ($env.LENDLOOP_MAIL_API === 'brevo') {\n    return {\n      url: 'https://api.brevo.com/v3/smtp/email',\n      body: { sender, to: [{ email: to }], subject, textContent: text },\n    };\n  }\n  return {\n    url: $env.LENDLOOP_MAILPIT_URL || 'http://mailpit:8025/api/v1/send',\n    body: { From: { Email: sender.email, Name: sender.name }, To: [{ Email: to }], Subject: subject, Text: text },\n  };\n}\n\nconst r = $json;\nconst appUrl = $env.LENDLOOP_APP_URL || 'http://localhost:3000';\nconst due = new Date(r.dueDate + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });\nconst days = r.daysOverdue === 1 ? '1 day' : r.daysOverdue + ' days';\nconst to = r.recipient.email;\nconst subject = '[LendLoop] Reminder: please return the ' + r.toolName;\nconst text = 'Hi ' + r.recipient.firstName + ',\\n\\nThe ' + r.toolName + ' you borrowed from ' + r.lenderFirstName +\n  ' was due back on ' + due + ' (' + days + ' ago). Please arrange to return it soon.\\n\\n' +\n  'Your loans: ' + appUrl + '/requests\\n\\n— LendLoop';\nreturn { json: { reminderKey: r.reminderKey, to, subject, text, mail: mailRequest(to, subject, text) } };"
       },
       "id": "571a5026-ad5f-4cc2-ab41-bd6d45085dbe",
       "name": "Compose reminder",
@@ -127,27 +127,30 @@
     },
     {
       "parameters": {
-        "fromEmail": "={{ $env.LENDLOOP_MAIL_FROM }}",
-        "toEmail": "={{ $json.to }}",
-        "subject": "={{ $json.subject }}",
-        "emailFormat": "text",
-        "text": "={{ $json.text }}",
+        "method": "POST",
+        "url": "={{ $json.mail.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.mail.body) }}",
         "options": {
-          "appendAttribution": false
+          "timeout": 15000
         }
       },
       "id": "e39f1e27-9a2e-42cc-a6c9-8ace4bb3be04",
       "name": "Send reminder email",
-      "type": "n8n-nodes-base.emailSend",
-      "typeVersion": 2.1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         1320,
         300
       ],
       "credentials": {
-        "smtp": {
-          "id": "LLMailpitSmtp001",
-          "name": "LendLoop SMTP"
+        "httpHeaderAuth": {
+          "id": "LLMailApiCred001",
+          "name": "LendLoop Mail API"
         }
       },
       "retryOnFail": true,

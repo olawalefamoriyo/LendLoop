@@ -176,13 +176,90 @@ describe("error workflow ⇄ Convex", () => {
   });
 });
 
+describe("email delivery over HTTP (Brevo in production, Mailpit locally)", () => {
+  // Every node that composes an email, with an input that makes it produce one.
+  const COMPOSERS: { file: string; node: string; input: Item }[] = [
+    {
+      file: "lendloop-loan-notifications.json",
+      node: "Compose message",
+      input: { json: { event: samplePayload } },
+    },
+    {
+      file: "lendloop-overdue-reminders.json",
+      node: "Compose reminder",
+      input: {
+        json: {
+          reminderKey: "reminder:abc:2026-11-12",
+          recipient: { email: "bob@example.com", firstName: "Bob" },
+          lenderFirstName: "Alice",
+          toolName: "Tent",
+          dueDate: "2026-11-10",
+          daysOverdue: 2,
+        },
+      },
+    },
+    {
+      file: "lendloop-error-handler.json",
+      node: "Compose ops alert",
+      input: { json: { payload: { workflowName: "LendLoop · Overdue reminders", executionId: "9", message: "boom" } } },
+    },
+  ];
+  const composed = async (c: (typeof COMPOSERS)[number], env: Record<string, string>) => {
+    const out = await runCode(codeOf(c.file, c.node), [c.input], { env });
+    return (Array.isArray(out) ? out[0] : out).json;
+  };
+
+  test("builds a Brevo API request when LENDLOOP_MAIL_API=brevo", async () => {
+    const env = { ...ENV, LENDLOOP_MAIL_API: "brevo", LENDLOOP_MAIL_FROM: "LendLoop <hello@example.org>", LENDLOOP_OPS_EMAIL: "ops@example.org" };
+    for (const c of COMPOSERS) {
+      const json = await composed(c, env);
+      expect(json.mail.url, c.node).toBe("https://api.brevo.com/v3/smtp/email");
+      expect(json.mail.body, c.node).toEqual({
+        sender: { name: "LendLoop", email: "hello@example.org" },
+        to: [{ email: json.to }],
+        subject: json.subject,
+        textContent: json.text,
+      });
+    }
+  });
+
+  test("defaults to Mailpit's send API (and accepts a bare sender address)", async () => {
+    const env = { ...ENV, LENDLOOP_MAIL_FROM: "no-reply@lendloop.local", LENDLOOP_OPS_EMAIL: "ops@lendloop.local" };
+    for (const c of COMPOSERS) {
+      const json = await composed(c, env);
+      expect(json.mail.url, c.node).toBe("http://mailpit:8025/api/v1/send");
+      expect(json.mail.body, c.node).toEqual({
+        From: { Email: "no-reply@lendloop.local", Name: "LendLoop" },
+        To: [{ Email: json.to }],
+        Subject: json.subject,
+        Text: json.text,
+      });
+    }
+  });
+
+  test("send nodes authenticate via a credential, time out, and route failures", () => {
+    const senders = Object.values(workflows).flatMap((w) =>
+      w.nodes.filter((n) => n.parameters.url === "={{ $json.mail.url }}").map((n) => ({ w, n })),
+    );
+    expect(senders).toHaveLength(3);
+    for (const { w, n } of senders) {
+      const label = `${w.name} / ${n.name}`;
+      expect(n.parameters.genericAuthType, label).toBe("httpHeaderAuth");
+      expect(n.credentials?.httpHeaderAuth?.name, label).toBe("LendLoop Mail API");
+      expect((n.parameters.options as { timeout?: number }).timeout, label).toBeGreaterThan(0);
+      expect(JSON.stringify(n.parameters), label).not.toMatch(/api-key/i);
+      expect((n as N8nNode & { onError?: string }).onError, label).toBeDefined();
+    }
+  });
+});
+
 describe("workflow JSON hygiene", () => {
   const all = Object.entries(workflows);
 
   test("no secrets or credential data in exported JSON", () => {
     for (const [file, w] of all) {
       const text = JSON.stringify(w);
-      expect(text, file).not.toMatch(/sk_(test|live)_|whsec_|-----BEGIN|password"\s*:\s*"[^"]/i);
+      expect(text, file).not.toMatch(/sk_(test|live)_|whsec_|xkeysib-|-----BEGIN|password"\s*:\s*"[^"]/i);
       for (const n of w.nodes) {
         for (const cred of Object.values(n.credentials ?? {})) expect(Object.keys(cred).sort()).toEqual(["id", "name"]);
       }
