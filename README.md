@@ -357,3 +357,62 @@ proxy.ts                   Clerk middleware (Next 16 name for middleware.ts)
 ## Running in production
 
 See **[PRODUCTION.md](PRODUCTION.md)** for what I'd change.
+
+### Deploying to production
+
+The hosted version runs on four services. Each one keeps its own secrets. Nothing is shared through the repo.
+
+```mermaid
+flowchart LR
+  Vercel[Next.js on Vercel] -- queries / mutations --> Convex[(Convex production)]
+  Convex -- signed webhook --> N8n[n8n on Railway]
+  N8n -- signed fetch / write-back --> Convex
+  N8n -- HTTPS API --> Brevo[Brevo email API]
+```
+
+**1. Convex (production deployment).** In the Convex dashboard, switch the project to **Production** and set these environment variables *before* the first deploy (`auth.config.ts` needs the Clerk issuer):
+
+| Variable | Value |
+| --- | --- |
+| `CLERK_JWT_ISSUER_DOMAIN` | Clerk Frontend API URL |
+| `ADMIN_EMAILS` | verified emails to promote to admin |
+| `LENDLOOP_TO_N8N_SECRET` / `N8N_TO_LENDLOOP_SECRET` | new values from `openssl rand -hex 32` (never reuse local ones) |
+| `N8N_LOAN_EVENTS_WEBHOOK_URL` | `https://<n8n-host>/webhook/lendloop-loan-events` (until set, notifications are recorded as `skipped`) |
+
+Then generate a **Production Deploy Key** (Settings → URL & Deploy Key) for Vercel.
+
+**2. Vercel.** Import the GitHub repo. Don't add the marketplace Convex or Clerk integrations, because they create new projects. Set:
+
+- **Build Command:** `npx convex deploy --cmd 'npm run build'`. This pushes Convex functions and injects `NEXT_PUBLIC_CONVEX_URL` into the build.
+- **Environment variables:** `CONVEX_DEPLOY_KEY`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`.
+
+Every push to `main` deploys both the frontend and the Convex functions.
+
+**3. n8n (Railway, Docker image `n8nio/n8n:<version>`).** Convex's cloud must be able to reach the webhook, so n8n needs a public HTTPS URL.
+
+- Attach a **volume** at `/home/node/.n8n`. Without it, workflows and credentials are lost on every redeploy.
+- Generate a domain on port `5678`.
+- Set the variables from [`.env.n8n.example`](.env.n8n.example) with production values, plus:
+
+| Variable | Why |
+| --- | --- |
+| `WEBHOOK_URL=https://<n8n-host>/` | so n8n shows (and registers) public webhook URLs |
+| `N8N_PROXY_HOPS=1` | n8n sits behind Railway's proxy |
+| `LENDLOOP_MAIL_API=brevo` | send email through Brevo's HTTPS API |
+| `LENDLOOP_CONVEX_SITE_URL=https://<deployment>.convex.site` | the Convex **site** URL (HTTP actions), not `.convex.cloud` |
+| `RAILWAY_RUN_UID=0` and `N8N_USER_FOLDER=/home/node` | Railway volumes are root-owned. Running as root lets n8n write to the volume, and `N8N_USER_FOLDER` keeps the data *on* the volume (as root, n8n would otherwise use `/root/.n8n`). |
+| `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`, `NODE_FUNCTION_ALLOW_BUILTIN=crypto` | Code nodes read the HMAC secrets and use Node's `crypto` |
+
+Changes in Railway are staged. Click **Deploy** to apply them.
+
+Then, in the n8n UI:
+1. Create a **Header Auth** credential named **LendLoop Mail API** with header `api-key` and your Brevo **API** key (`xkeysib-…`, not the SMTP key).
+2. Import the three files from `n8n/workflows/`, error handler first.
+3. Select that credential in each send node, set **Settings → Error workflow** on the two main workflows, then **Publish** them.
+
+**4. Brevo.** Verify the sender address used in `LENDLOOP_MAIL_FROM`. Under **Security → Authorized IPs**, leave IP blocking **off for API keys**, because Railway's egress IP isn't fixed.
+
+**Smoke test**
+- An unsigned `POST` to the webhook must return **401**.
+- **Execute** "Overdue reminders" in n8n. "Fetch overdue loans" turning green proves n8n→Convex signing works.
+- A real borrow request should email the lender and show "… sent just now" on the loan.

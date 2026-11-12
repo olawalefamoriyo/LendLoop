@@ -2,6 +2,15 @@
 
 This repo is built to be easy to evaluate locally. To run it for real, I'd change the following, roughly in priority order.
 
+## Shortcuts in the current hosted demo
+
+The demo deployment (Vercel + Convex production + n8n on Railway + Brevo) is real, but it takes a few shortcuts that I'd undo first:
+
+- **Clerk development instance.** It works on any URL without a custom domain, but it shows a "Development mode" badge, caps users, and uses Clerk's shared OAuth apps. For a launch I'd move to a Clerk **production instance** on our own domain (DNS records, our own OAuth credentials).
+- **Free-mail sender.** Emails come from a Gmail address through Brevo, so they fail DMARC alignment and may land in spam. I'd send from our own domain, with Brevo's DKIM record and a DMARC policy published.
+- **Single n8n container, workflows imported by hand.** It runs with SQLite on a Railway volume, as root (`RAILWAY_RUN_UID=0`) so it can write to the volume. I'd move to Postgres plus queue mode (below), and run as the non-root `node` user on storage that user owns.
+- **Email over a provider API, not SMTP.** This is deliberate rather than a shortcut. Some hosts block outbound SMTP, and a blocked SMTP connection hangs instead of failing. The HTTP send node has a timeout and retries, so a failure reaches the `failed` path quickly. I'd keep this.
+
 ## Integration & reliability
 
 - **Exactly-once-ish notifications.** Delivery today is at-least-once. If n8n sends the email but the HTTP response to Convex is lost, Convex retries and the user may get a duplicate. To fix this, n8n should *claim* the `eventId` before sending (a signed `POST /n8n/notification-claim` that returns 409 if the event is already claimed or sent), or dedupe on `eventId` in n8n's own data store.

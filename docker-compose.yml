@@ -51,7 +51,7 @@ services:
     environment:
       GENERIC_TIMEZONE: UTC
       TZ: UTC
-      N8N_WEBHOOK_URL: http://localhost:5678/
+      WEBHOOK_URL: http://localhost:5678/ # public base URL n8n uses for webhook URLs
       N8N_SECURE_COOKIE: "false" # plain http on localhost only
       # Code nodes read the shared HMAC secrets from the environment and need Node's crypto.
       N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"

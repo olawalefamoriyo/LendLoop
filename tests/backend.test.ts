@@ -33,6 +33,9 @@ const drill = { name: "Cordless drill", category: "power_tools", condition: "goo
 
 beforeEach(() => {
   vi.useFakeTimers();
+  // Pin "now" to midday UTC: reminders are per UTC day, so tests that advance
+  // the clock must not cross midnight depending on when the suite runs.
+  vi.setSystemTime(new Date("2026-06-15T12:00:00Z"));
   process.env.ADMIN_EMAILS = "admin@example.com";
   process.env.N8N_TO_LENDLOOP_SECRET = IN_SECRET;
   delete process.env.N8N_LOAN_EVENTS_WEBHOOK_URL;
