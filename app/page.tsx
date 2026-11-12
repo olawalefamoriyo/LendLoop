@@ -34,7 +34,7 @@ function AuthCta({ size = "md" }: { size?: "md" | "lg" }) {
   return (
     <SignInButton mode="modal" forceRedirectUrl="/tools">
       <Button size={size}>
-        {size === "lg" ? "Start lending & borrowing" : "Sign in"} <Icon name="arrowRight" />
+        Sign in to lend or borrow <Icon name="arrowRight" />
       </Button>
     </SignInButton>
   );
