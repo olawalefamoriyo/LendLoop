@@ -1,5 +1,6 @@
 # LendLoop
 
+<!-- Live Demo: https://lendloop-seven.vercel.app/incoming--> 
 **Borrow what you need. Lend what you don't.**
 
 A neighborhood tool-lending board. Neighbors list tools, request to borrow them for a date range, and approve, decline or close out loans. n8n handles notifications and daily overdue reminders.
